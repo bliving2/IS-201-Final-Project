@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Tangled Pac-Man</title>
+<style>
+  :root{--bg:#fdf6ff;--panel:#ffeefd;--wall:#d6b3ff;--pac:#c3a0ff;--sun:#ffd27f;--accent:#d8b6ff}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial;display:flex;flex-direction:column;align-items:center;gap:12px;padding:20px}
+  #ui{display:flex;gap:12px;align-items:center}
+  button{background:var(--accent);border:none;color:#fff;padding:10px 16px;border-radius:10px;font-size:16px;cursor:pointer}
+  #message{min-height:28px;color:#7b3cff;font-weight:700}
+  canvas{background:var(--panel);border-radius:12px;border:6px solid rgba(234,201,255,0.9);image-rendering:pixelated}
+</style>
+</head>
+<body>
+<a href="index.html">Home Page</a>
+
+<div id="ui">
+  <button id="startBtn">Start Game</button>
+  <div id="message"></div>
+</div>
+<canvas id="game"></canvas>
+<script>
+// --- CONFIG ---
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const startBtn = document.getElementById('startBtn');
+const message = document.getElementById('message');
+
+const tile = 20; // px per cell
+
+// MAZE: 1=wall, 0=path, 2=sun pellet
+const maze = [
+  [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+  [1,2,2,2,2,2,2,2,2,2,2,1,2,2,2,2,2,1,2,2,2,2,2,2,2,2,2,2,2,1],
+  [1,2,1,1,1,1,2,1,1,1,2,1,2,1,1,1,2,1,2,1,1,1,2,1,1,1,1,1,2,1],
+  [1,2,1,0,0,1,2,1,0,1,2,1,0,1,0,1,2,1,0,1,2,1,0,0,1,1,0,1,2,1],
+  [1,2,1,0,0,1,2,1,0,1,2,1,0,1,0,1,2,1,0,1,2,1,0,0,1,1,0,1,2,1],
+  [1,2,1,1,1,1,2,1,1,1,2,1,0,1,0,1,2,1,1,1,2,1,1,1,1,1,1,1,2,1],
+  [1,2,2,2,2,2,2,2,2,2,2,1,0,1,0,1,2,2,2,2,2,2,2,2,2,2,2,2,2,1],
+  [1,1,1,1,1,1,1,1,1,1,0,1,0,1,0,1,0,1,1,1,1,1,1,1,1,1,1,1,1,1],
+  [0,0,0,0,0,1,2,0,0,0,0,0,0,1,0,0,0,0,0,1,2,0,0,0,0,0,0,1,0,0],
+  [1,1,1,1,0,1,2,1,1,1,1,1,0,1,0,1,1,1,1,1,2,1,0,1,1,1,1,1,1,1],
+  [1,2,2,2,2,2,2,2,2,1,2,2,2,2,2,2,2,1,2,2,2,2,2,2,2,2,2,2,2,1],
+  [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+];
+
+const rows = maze.length;
+const cols = maze[0].length;
+canvas.width = cols * tile;
+canvas.height = rows * tile;
+
+// GAME STATE
+let gameRunning = false;
+let sunsLeft = 0;
+let frameCount = 0;
+
+// PAC-MAN (tile-based)
+let pac = { x: 14, y: 10, dir: {x:0,y:0}, nextDir: {x:0,y:0} };
+
+// GHOSTS -- two ghosts with types (blinky/pinky)
+const ghostColors = { blinky: '#ff6b8a', pinky: '#6fb8ff' };
+let ghosts = [
+  // put them in the ghost pen (we'll define pen coordinates)
+  { id: 'blinky', x: 14, y: 8, dir: {x:0,y:0}, color: ghostColors.blinky, inPen: true, releaseTicks: 40 },
+  { id: 'pinky',  x: 15, y: 8, dir: {x:0,y:0}, color: ghostColors.pinky, inPen: true, releaseTicks: 80 }
+];
+
+// Ghost pen door and home positions
+const penDoor = { x: 14, y: 7 }; // tile directly above pen (where ghosts exit to)
+const penPositions = [ {x:14,y:8}, {x:15,y:8} ]; // inside pen
+
+// --- Helper: wrap X horizontally ---
+function wrapX(x){
+  if (x < 0) return cols - 1;
+  if (x >= cols) return 0;
+  return x;
+}
+
+// --- Make maze fully reachable by carving short corridors between components ---
+// keep original approach: convert 0->2 and connect components
+function carveCorridor(ax, ay, bx, by){
+  let x = ax, y = ay;
+  while (x !== bx){
+    x += x < bx ? 1 : -1;
+    if (x >= 0 && x < cols && y >= 0 && y < rows) maze[y][x] = 2;
+  }
+  while (y !== by){
+    y += y < by ? 1 : -1;
+    if (x >= 0 && x < cols && y >= 0 && y < rows) maze[y][x] = 2;
+  }
+}
+
+function findComponents(){
+  const visited = Array.from({length:rows},()=>Array(cols).fill(false));
+  const comps = [];
+  const walkable = (r,c) => (maze[r][c] === 0 || maze[r][c] === 2);
+  for (let r=0;r<rows;r++){
+    for (let c=0;c<cols;c++){
+      if (!visited[r][c] && walkable(r,c)){
+        const q = [[r,c]]; visited[r][c]=true;
+        const comp = [];
+        while(q.length){
+          const [rr,cc] = q.pop();
+          comp.push([cc,rr]); // store as [x,y]
+          const deltas = [[1,0],[-1,0],[0,1],[0,-1]];
+          for (const d of deltas){
+            const nr = rr + d[1], nc = cc + d[0];
+            if (nr>=0 && nr<rows && nc>=0 && nc<cols && !visited[nr][nc] && walkable(nr,nc)){
+              visited[nr][nc] = true;
+              q.push([nr,nc]);
+            }
+          }
+        }
+        comps.push(comp);
+      }
+    }
+  }
+  return comps;
+}
+
+function connectMazeComponents(){
+  let comps = findComponents();
+  if (comps.length === 0){
+    for (let r=0;r<rows;r++){
+      for (let c=0;c<cols;c++){
+        if (maze[r][c] !== 1){ maze[r][c] = 2; }
+      }
+    }
+    comps = findComponents();
+  }
+  while (comps.length > 1){
+    const a = comps[0][0];
+    let bestDist = Infinity;
+    let best = null;
+    for (let i=1;i<comps.length;i++){
+      for (const [bx,by] of comps[i]){
+        const d = Math.abs(a[0]-bx) + Math.abs(a[1]-by);
+        if (d < bestDist){ bestDist = d; best = {bx,by,compIndex:i}; }
+      }
+    }
+    carveCorridor(a[0], a[1], best.bx, best.by);
+    comps = findComponents();
+  }
+}
+
+// Convert explicit 0 to 2
+for (let r=0;r<rows;r++) for (let c=0;c<cols;c++) if (maze[r][c] === 0) maze[r][c] = 2;
+connectMazeComponents();
+
+// helper BFS pathfinder (tile-based). returns next step [nx,ny] or null if no path
+function findNextStep(startX,startY,targetX,targetY){
+  // normalize targets horizontally (wrap)
+  targetX = wrapX(targetX);
+  const visited = Array.from({length:rows},()=>Array(cols).fill(false));
+  const prev = Array.from({length:rows},()=>Array(cols).fill(null));
+  const q = [];
+  q.push([startX, startY]);
+  visited[startY][startX] = true;
+  while(q.length){
+    const [cx,cy] = q.shift();
+    if (cx === targetX && cy === targetY) break;
+    const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
+    for (const d of dirs){
+      let nx = cx + d[0];
+      let ny = cy + d[1];
+      nx = wrapX(nx);
+      if (ny < 0 || ny >= rows) continue;
+      if (visited[ny][nx]) continue;
+      if (maze[ny][nx] === 1) continue;
+      visited[ny][nx] = true;
+      prev[ny][nx] = [cx,cy];
+      q.push([nx,ny]);
+    }
+  }
+  // if target not visited, no path
+  if (!visited[targetY][targetX]) return null;
+  // walk back one step from target to start
+  let px = targetX, py = targetY;
+  while(prev[py][px] && !(prev[py][px][0] === startX && prev[py][px][1] === startY)){
+    const p = prev[py][px];
+    px = p[0]; py = p[1];
+  }
+  // if prev is null and start==target then return target (stay)
+  if (startX === targetX && startY === targetY) return [startX, startY];
+  return [px, py];
+}
+
+// Ensure pac and ghosts start on walkable tiles
+function nearestWalkable(x,y){
+  if (maze[y] && maze[y][x] !== 1) return [x,y];
+  const visited = Array.from({length:rows},()=>Array(cols).fill(false));
+  const q = [[x,y]];
+  visited[y][x] = true;
+  while(q.length){
+    const [cx,cy] = q.shift();
+    const deltas = [[1,0],[-1,0],[0,1],[0,-1]];
+    for (const d of deltas){
+      let nx = cx + d[0], ny = cy + d[1];
+      nx = wrapX(nx);
+      if (ny < 0 || ny >= rows) continue;
+      if (visited[ny][nx]) continue;
+      visited[ny][nx] = true;
+      if (maze[ny][nx] !== 1) return [nx,ny];
+      q.push([nx,ny]);
+    }
+  }
+  return [x,y];
+}
+
+if (maze[pac.y][pac.x] === 1){
+  const [nx,ny] = nearestWalkable(pac.x,pac.y);
+  pac.x = nx; pac.y = ny;
+}
+
+// Place pellets on all non-walls, then remove under pac and inside pen
+for (let r=0;r<rows;r++){
+  for (let c=0;c<cols;c++){
+    if (maze[r][c] !== 1) maze[r][c] = 2;
+  }
+}
+// remove sun under pac and inside pen
+maze[pac.y][pac.x] = 0;
+for (const p of penPositions) maze[p.y][p.x] = 0;
+
+// ensure ghosts are on valid pen tiles (or nearest)
+for (let i=0;i<ghosts.length;i++){
+  const g = ghosts[i];
+  if (!maze[g.y] || maze[g.y][g.x] === 1 || (g.x === pac.x && g.y === pac.y)){
+    const [nx,ny] = nearestWalkable(g.x,g.y);
+    ghosts[i].x = nx; ghosts[i].y = ny;
+  }
+}
+
+// recalc sun count
+sunsLeft = 0;
+for (let r=0;r<rows;r++) for (let c=0;c<cols;c++) if (maze[r][c] === 2) sunsLeft++;
+
+// DRAWING
+function draw() {
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  drawMaze();
+  drawSuns();
+  drawPac();
+  ghosts.forEach(drawGhost);
+}
+
+function drawMaze() {
+  for (let r=0;r<rows;r++){
+    for (let c=0;c<cols;c++){
+      if (maze[r][c]===1){
+        ctx.fillStyle = '#d6b3ff';
+        roundRect(ctx,c*tile,r*tile,tile,tile,4,true,false);
+      }
+    }
+  }
+}
+
+function drawSuns(){
+  for (let r=0;r<rows;r++){
+    for (let c=0;c<cols;c++){
+      if (maze[r][c]===2){
+        drawSun(c*tile+tile/2,r*tile+tile/2,4);
+      }
+    }
+  }
+}
+
+function drawSun(cx,cy,radius){
+  ctx.save();
+  ctx.translate(cx,cy);
+  ctx.beginPath(); ctx.arc(0,0,radius,0,Math.PI*2); ctx.fillStyle='#ffd27f'; ctx.fill();
+  for (let i=0;i<8;i++){ ctx.beginPath(); ctx.moveTo((radius+2)*Math.cos(i*Math.PI/4),(radius+2)*Math.sin(i*Math.PI/4)); ctx.lineTo((radius+6)*Math.cos(i*Math.PI/4),(radius+6)*Math.sin(i*Math.PI/4)); ctx.strokeStyle='#ffcf7a'; ctx.lineWidth=1; ctx.stroke(); }
+  ctx.restore();
+}
+
+function drawPac(){
+  const cx = pac.x*tile + tile/2;
+  const cy = pac.y*tile + tile/2;
+  const ang = pac.dir.x===-1? Math.PI : pac.dir.x===1? 0 : pac.dir.y===-1? -Math.PI/2 : Math.PI/2;
+  ctx.fillStyle = '#c3a0ff';
+  ctx.beginPath();
+  ctx.moveTo(cx,cy);
+  ctx.arc(cx,cy,tile/2,ang+Math.PI/6,ang-Math.PI/6,false);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawGhost(g){
+  const x = g.x*tile; const y = g.y*tile;
+  ctx.fillStyle = g.color;
+  ctx.beginPath();
+  ctx.arc(x+tile/2,y+tile/2,tile/2,Math.PI,0);
+  ctx.lineTo(x+tile,y+tile);
+  ctx.lineTo(x,y+tile);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle='white'; ctx.beginPath(); ctx.arc(x+tile*0.35,y+tile*0.45, tile*0.12,0,Math.PI*2); ctx.arc(x+tile*0.65,y+tile*0.45,tile*0.12,0,Math.PI*2); ctx.fill();
+}
+
+function roundRect(ctx,x,y,w,h,r,fill,stroke){ if (r===undefined) r=5; ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); if(fill)ctx.fill(); if(stroke)ctx.stroke(); }
+
+// --- MOVEMENT / COLLISION Helpers ---
+function isWalkable(x,y){
+  x = wrapX(x);
+  if (y<0||y>=rows) return false;
+  return maze[y][x] !== 1;
+}
+
+function opposite(dir){ return {x:-dir.x,y:-dir.y}; }
+
+// --- GAME TICKS ---
+let pacTick = null; // interval id
+let ghostTick = null;
+const PAC_INTERVAL = 120; // ms between tile moves
+const GHOST_INTERVAL = 160; // ghosts a bit faster
+
+// START / STOP
+function startGame(){
+  message.textContent = '';
+  gameRunning = true;
+  frameCount = 0;
+
+  // ensure pac on walkable tile
+  if (!isWalkable(pac.x,pac.y)) {
+    for (let r=0;r<rows;r++){
+      for (let c=0;c<cols;c++){
+        if (maze[r][c]===2){ pac.x=c; pac.y=r; c=cols; r=rows; break; }
+      }
+    }
+  }
+
+  // ensure ghosts not on pac
+  for (const g of ghosts) if (g.x === pac.x && g.y === pac.y){
+    const [nx,ny] = nearestWalkable(g.x,g.y);
+    g.x = nx; g.y = ny;
+  }
+
+  if (pacTick) clearInterval(pacTick);
+  if (ghostTick) clearInterval(ghostTick);
+  pacTick = setInterval(()=>{ if(gameRunning){ handlePacMove(); } }, PAC_INTERVAL);
+  ghostTick = setInterval(()=>{ if(gameRunning){ handleGhosts(); } }, GHOST_INTERVAL);
+}
+
+function stopGame(){ gameRunning=false; clearInterval(pacTick); clearInterval(ghostTick); }
+
+// Pac movement: respect queued nextDir and only change when possible
+function handlePacMove(){
+  if (pac.nextDir.x!==0 || pac.nextDir.y!==0){
+    let tx = pac.x + pac.nextDir.x; let ty = pac.y + pac.nextDir.y;
+    tx = wrapX(tx);
+    if (isWalkable(tx,ty)) pac.dir = { x: pac.nextDir.x, y: pac.nextDir.y };
+  }
+  let nx = pac.x + pac.dir.x; let ny = pac.y + pac.dir.y;
+  nx = wrapX(nx);
+  if (isWalkable(nx,ny)){
+    pac.x = nx; pac.y = ny;
+    if (maze[ny][nx]===2){ maze[ny][nx]=0; sunsLeft--; if (sunsLeft<=0) winGame(); }
+    checkGhostCollision();
+  } else {
+    pac.dir = {x:0,y:0};
+  }
+}
+
+// GHOST AI helpers
+function pacForwardTarget(steps=4){
+  let tx = pac.x + pac.dir.x * steps;
+  let ty = pac.y + pac.dir.y * steps;
+  tx = wrapX(tx);
+  if (ty < 0) ty = 0;
+  if (ty >= rows) ty = rows-1;
+  if (pac.dir.x===0 && pac.dir.y===0){ tx = pac.x; ty = pac.y; }
+  return [tx,ty];
+}
+
+// handleGhosts implements ghost pen release + BFS-chase
+function handleGhosts(){
+  frameCount++;
+  for (const g of ghosts){
+    // handle release countdown when in pen
+    if (g.inPen){
+      if (g.releaseTicks > 0){
+        g.releaseTicks--;
+        // small in-pen wiggle (optional): keep them in place
+        continue;
+      } else {
+        // move up to doorway if possible
+        if (g.x === penDoor.x && g.y === penDoor.y){
+          g.inPen = false;
+          // pick initial dir (will be set by pathfinding below)
+        } else {
+          // simple move toward penDoor (one tile per ghost tick)
+          const next = findNextStep(g.x,g.y,penDoor.x,penDoor.y);
+          if (next) { g.x = next[0]; g.y = next[1]; }
+          continue;
+        }
+      }
+    }
+
+    // Ghost is active: compute target depending on id
+    let target;
+    if (g.id === 'blinky') {
+      // Blinky: target Pac-Man directly
+      target = [pac.x, pac.y];
+    } else if (g.id === 'pinky') {
+      // Pinky: target 4 tiles ahead of Pac-Man
+      target = pacForwardTarget(4);
+    } else {
+      // fallback to chasing Pac
+      target = [pac.x, pac.y];
+    }
+
+    // find next step toward target using BFS
+    const nextStep = findNextStep(g.x, g.y, target[0], target[1]);
+
+    if (nextStep){
+      // compute direction
+      const dx = nextStep[0] - g.x;
+      // handle wrap: if wrapped move, adjust dx
+      let ddx = dx;
+      if (Math.abs(ddx) > 1){
+        // wrapped (e.g., from 0 to cols-1)
+        if (ddx > 0) ddx = ddx - cols;
+        else ddx = ddx + cols;
+      }
+      g.dir = { x: Math.sign(ddx), y: Math.sign(nextStep[1] - g.y) };
+      // apply move with wrapX
+      g.x = wrapX(nextStep[0]);
+      g.y = nextStep[1];
+    } else {
+      // if no path found (shouldn't happen), pick a random valid direction
+      const dirs = [{x:1,y:0},{x:-1,y:0},{x:0,y:1},{x:0,y:-1}];
+      const options = dirs.filter(d => isWalkable(wrapX(g.x + d.x), g.y + d.y));
+      if (options.length) {
+        const choice = options[Math.floor(Math.random()*options.length)];
+        g.dir = {x: choice.x, y: choice.y};
+        g.x = wrapX(g.x + g.dir.x);
+        g.y = g.y + g.dir.y;
+        if (g.y < 0) g.y = 0;
+        if (g.y >= rows) g.y = rows-1;
+      }
+    }
+  }
+  checkGhostCollision();
+}
+
+function checkGhostCollision(){
+  for (const g of ghosts){ if (g.x===pac.x && g.y===pac.y) loseLifeOrRestart(); }
+}
+
+function loseLifeOrRestart(){
+  message.textContent = 'Oh no! Ghost got you — restarting...';
+  stopGame();
+  setTimeout(()=> location.reload(), 1000);
+}
+
+function winGame(){
+  message.textContent = 'You Win! 🎉';
+  stopGame();
+  confetti();
+}
+
+function confetti(){
+  const particles = [];
+  for (let i=0;i<80;i++) particles.push({x:Math.random()*canvas.width,y:Math.random()*-200,vy:1+Math.random()*3, size:2+Math.random()*4, color: ['#ffd27f','#fff48f','#ffb3ba','#bfefff'][Math.floor(Math.random()*4)]});
+  let t=0; const id = setInterval(()=>{
+    ctx.clearRect(0,0,canvas.width,canvas.height); draw();
+    for (const p of particles){ p.y += p.vy; ctx.fillStyle=p.color; ctx.fillRect(p.x,p.y,p.size,p.size); }
+    t+=1; if (t>120) clearInterval(id);
+  },16);
+}
+
+// DRAW loop for smooth visuals
+function rafLoop(){ draw(); requestAnimationFrame(rafLoop); }
+requestAnimationFrame(rafLoop);
+
+// INPUT
+window.addEventListener('keydown', e=>{
+  if (!gameRunning) return;
+  const key = e.key;
+  if (key==='ArrowUp'){ pac.nextDir = {x:0,y:-1}; }
+  if (key==='ArrowDown'){ pac.nextDir = {x:0,y:1}; }
+  if (key==='ArrowLeft'){ pac.nextDir = {x:-1,y:0}; }
+  if (key==='ArrowRight'){ pac.nextDir = {x:1,y:0}; }
+});
+
+// START button
+startBtn.addEventListener('click', ()=>{
+  startBtn.disabled = true;
+  startBtn.style.opacity = 0.6;
+  startGame();
+});
+
+// ensure pac initial position valid (in case map changed)
+if (!isWalkable(pac.x,pac.y)){
+  outer: for (let r=0;r<rows;r++) for (let c=0;c<cols;c++) if (maze[r][c]===2||maze[r][c]===0){ pac.x=c; pac.y=r; break outer; }
+}
+
+// START / initialize timing
+function initializeAndStart(){
+  // Reset release timers so ghosts start in pen
+  ghosts.forEach((g,i)=>{
+    g.inPen = true;
+    g.releaseTicks = 80 + i*80; // staggered release
+    // put them in pen positions
+    if (penPositions[i]) { g.x = penPositions[i].x; g.y = penPositions[i].y; }
+  });
+  // ensure pen tiles are walkable (we cleared them earlier)
+  startGame();
+}
+
+// auto-enable Start button to initialize the pen correctly
+startBtn.addEventListener('click', initializeAndStart, { once: true });
+
+</script>
+</body>
+</html>

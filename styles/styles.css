@@ -1,0 +1,92 @@
+body {
+    background-color: rgb(210, 183, 223);
+    color: rgb(8, 84, 128);
+}
+
+h1 {
+    font-size: 40px;
+    text-align: center;
+    color: black;
+    font-family: cursive;
+}
+
+h2 {
+    text-align: center;
+    color: rgb(1, 46, 87);
+
+}
+
+h3 {
+    text-align: center;
+    color: rgb(2, 91, 57);
+}
+
+h4 {
+    text-align: center;
+    color: rgb(93, 3, 60);
+}
+
+.section {
+    font-family: 'Lucida Sans', 'Lucida Sans Regular', 'Lucida Grande', 'Lucida Sans Unicode', Geneva, Verdana, sans-serif;
+}
+
+#Examples {
+    color: black;
+}
+
+#mine {
+    color: rgb(0, 0, 87);
+}
+
+#Basic {
+    color: rgb(58, 0, 0);
+}
+
+#documentary {
+    color: rgb(0, 68, 68);
+}
+
+.quick-nav {
+    font-family: 'Gill Sans', 'Gill Sans MT', Calibri, 'Trebuchet MS', sans-serif;
+}
+
+.left {
+    position: fixed;
+    text-align: center;
+    top: 15px;
+    left: 15px;
+    width: 60px;
+    bottom: 10px;
+    height: 20px;
+    padding: 0.5%;
+    text-decoration: none;
+}
+
+.right {
+    position: fixed;
+    text-align: center;
+    top: 15px;
+    right: 15px;
+    width: 100px;
+    bottom: 10px;
+    height: 20px;
+    padding: 0.5%;
+    text-decoration: none;
+}
+
+.common {
+    background-color: rgb(143, 198, 247);
+    border: 2px solid white;
+}
+
+.sources{
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+}
+
+h5{
+    text-align: center;
+    font-weight: bold;
+}
